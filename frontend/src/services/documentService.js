@@ -103,13 +103,14 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000
  * Checks if a user has already uploaded a file with the same name and size.
  * Returns true if a duplicate exists.
  */
-export async function checkDuplicate(fileName, fileSize, userId) {
+export async function checkDuplicate(fileName, fileSize, userId, scope = 'workspace') {
   const { data, error } = await supabase
     .from('documents')
     .select('id')
     .eq('user_id', userId)
     .eq('file_name', fileName)
     .eq('file_size', fileSize)
+    .eq('scope', scope)
     .limit(1)
 
   if (error) {
@@ -123,83 +124,57 @@ export async function checkDuplicate(fileName, fileSize, userId) {
 // ── Upload ───────────────────────────────────────────────────
 
 /**
- * Uploads a file to Supabase Storage and saves metadata to the documents table.
- * Triggers Module 4 AI processing pipeline in FastAPI backend.
+ * Uploads a file via the FastAPI backend (which handles processing).
+ * Supports scope: 'workspace' (private, default) | 'company' (shared, requires Knowledge Admin role).
  *
- * @param {File}     file      - The File object to upload
- * @param {string}   category  - Document category (e.g. 'HR', 'Finance')
- * @param {string}   userId    - Authenticated user's UUID
+ * @param {File}     file       - The File object to upload
+ * @param {string}   category   - Document category (e.g. 'HR', 'Finance')
+ * @param {string}   userId     - Authenticated user's UUID
  * @param {Function} onProgress - Optional progress callback (0-100)
+ * @param {string}   scope      - 'workspace' | 'company' (default: 'workspace')
  * @returns {Promise<{data: object|null, error: string|null}>}
  */
-export async function uploadDocument(file, category, userId, onProgress) {
+export async function uploadDocument(file, category, userId, onProgress, scope = 'workspace') {
   // 1. Validate
   const validation = validateFile(file)
   if (!validation.valid) return { data: null, error: validation.error }
 
-  // 2. Duplicate check
-  const isDuplicate = await checkDuplicate(file.name, file.size, userId)
+  // 2. Duplicate check (scope-aware)
+  const isDuplicate = await checkDuplicate(file.name, file.size, userId, scope)
   if (isDuplicate) {
     return {
       data: null,
-      error: `"${file.name}" has already been uploaded. Please rename the file or delete the existing copy.`,
+      error: `"${file.name}" has already been uploaded in ${scope} scope. Please rename or delete the existing copy.`,
     }
   }
 
-  // 3. Build storage path: {userId}/{timestamp}_{sanitizedFileName}
-  const sanitizedName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_')
-  const storagePath = `${userId}/${Date.now()}_${sanitizedName}`
-  const fileType = getFileTypeLabel(file.name)
-
-  // 4. Upload to Supabase Storage
+  // 3–5: Delegate to FastAPI backend (handles storage, DB insert, FAISS indexing)
   onProgress?.(10)
-  const { error: storageError } = await supabase.storage
-    .from(BUCKET_NAME)
-    .upload(storagePath, file, {
-      cacheControl: '3600',
-      upsert: false,
-      contentType: file.type || 'application/octet-stream',
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('user_id', userId)
+    formData.append('category', category || 'General')
+    formData.append('scope', scope)
+
+    const res = await fetch(`${API_BASE_URL}/documents/upload`, {
+      method: 'POST',
+      body: formData,
     })
 
-  if (storageError) {
-    console.error('[documentService] Storage upload error:', storageError)
-    return { data: null, error: `Upload failed: ${storageError.message}` }
+    onProgress?.(90)
+    const json = await res.json()
+
+    if (!res.ok) {
+      return { data: null, error: json.detail || `Upload failed (${res.status})` }
+    }
+
+    onProgress?.(100)
+    return { data: json.document, error: null }
+  } catch (err) {
+    console.error('[documentService] Upload error:', err)
+    return { data: null, error: err.message }
   }
-  onProgress?.(70)
-
-  // 5. Save metadata to documents table
-  const { data: docRow, error: dbError } = await supabase
-    .from('documents')
-    .insert([
-      {
-        user_id: userId,
-        file_name: file.name,
-        file_type: fileType,
-        file_size: file.size,
-        storage_path: storagePath,
-        category: category || 'General',
-        status: 'Uploaded',
-      },
-    ])
-    .select()
-    .single()
-
-  if (dbError) {
-    console.error('[documentService] DB insert error:', dbError)
-    // Attempt to roll back storage upload
-    await supabase.storage.from(BUCKET_NAME).remove([storagePath])
-    return { data: null, error: `Failed to save document record: ${dbError.message}` }
-  }
-
-  onProgress?.(90)
-
-  // 6. Trigger backend processing (Module 4)
-  triggerProcessing(docRow.id, userId).catch((err) =>
-    console.warn('[documentService] Backend processing trigger warning:', err)
-  )
-
-  onProgress?.(100)
-  return { data: docRow, error: null }
 }
 
 // ── Processing Triggers (Module 4 Backend) ───────────────────
@@ -286,7 +261,19 @@ export async function getDocument(docId) {
  * @returns {Promise<{success: boolean, error: string|null}>}
  */
 export async function deleteDocument(doc) {
-  // 1. Remove from FAISS vector index (best effort)
+  // 1. Try Backend API endpoint first (handles FAISS, chunks, storage, DB, and email notifications)
+  try {
+    const res = await fetch(`${API_BASE_URL}/documents/${doc.id}?user_id=${doc.user_id}`, {
+      method: 'DELETE',
+    })
+    if (res.ok) {
+      return { success: true, error: null }
+    }
+  } catch (e) {
+    console.warn('[documentService] Backend delete failed, falling back to direct DB delete:', e)
+  }
+
+  // 2. Fallback: Remove from FAISS vector index
   try {
     await fetch(`${API_BASE_URL}/processing/index/${doc.id}?user_id=${doc.user_id}`, {
       method: 'DELETE',
@@ -295,7 +282,7 @@ export async function deleteDocument(doc) {
     console.warn('[documentService] FAISS index delete warning:', e)
   }
 
-  // 2. Remove from Storage
+  // 3. Fallback: Remove from Storage
   const { error: storageError } = await supabase.storage
     .from(BUCKET_NAME)
     .remove([doc.storage_path])
@@ -304,7 +291,7 @@ export async function deleteDocument(doc) {
     console.error('[documentService] Storage delete error:', storageError)
   }
 
-  // 3. Delete metadata row
+  // 4. Fallback: Delete metadata row
   const { error: dbError } = await supabase
     .from('documents')
     .delete()
@@ -342,6 +329,183 @@ export async function downloadDocument(doc) {
   anchor.click()
 
   return { success: true, error: null }
+}
+
+/**
+ * Obtains a secure temporary URL for rendering or viewing a document in the PDF viewer.
+ * @param {string} docId  - Document UUID
+ * @param {string} userId - Authenticated user UUID
+ * @returns {Promise<{url: string|null, fileName: string|null, fileType: string|null, error: string|null}>}
+ */
+export async function getDocumentFileUrl(docId, userId) {
+  if (!docId) return { url: null, error: 'Document ID is required.' }
+
+  // 1. Try Backend signed URL endpoint (verifies workspace privacy and company permissions)
+  try {
+    const res = await fetch(`${API_BASE_URL}/documents/${docId}/signed-url?user_id=${userId}`)
+    if (res.ok) {
+      const json = await res.json()
+      if (json.signed_url) {
+        return {
+          url: json.signed_url,
+          fileName: json.file_name || 'Document.pdf',
+          fileType: json.file_type || 'PDF',
+          error: null,
+        }
+      }
+    } else if (res.status === 403) {
+      return { url: null, error: 'Access denied: You do not have permission to view this document.' }
+    } else if (res.status === 404) {
+      return { url: null, error: 'Document not found or has been deleted.' }
+    }
+  } catch (err) {
+    console.warn('[documentService] Backend signed URL request failed, attempting fallback:', err)
+  }
+
+  // 2. Direct Supabase Signed URL check
+  try {
+    const { data: doc, error: docErr } = await supabase
+      .from('documents')
+      .select('id, file_name, file_type, storage_path, scope, user_id')
+      .eq('id', docId)
+      .single()
+
+    if (!docErr && doc?.storage_path) {
+      const { data: signedData, error: signedErr } = await supabase.storage
+        .from(BUCKET_NAME)
+        .createSignedUrl(doc.storage_path, 900)
+
+      if (!signedErr && signedData?.signedUrl) {
+        return {
+          url: signedData.signedUrl,
+          fileName: doc.file_name || 'Document.pdf',
+          fileType: doc.file_type || 'PDF',
+          error: null,
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[documentService] Direct Supabase signed URL error:', e)
+  }
+
+  // 3. Fallback to direct backend streaming endpoint
+  return {
+    url: `${API_BASE_URL}/documents/${docId}/file?user_id=${userId}`,
+    fileName: 'Document.pdf',
+    fileType: 'PDF',
+    error: null,
+  }
+}
+
+function formatErrorMessage(json, res) {
+  if (!json) return `Request failed (${res?.status || 'Unknown'})`
+  if (typeof json.detail === 'string') return json.detail
+  if (Array.isArray(json.detail)) return json.detail.map((e) => e.msg || JSON.stringify(e)).join(', ')
+  if (json.detail) return JSON.stringify(json.detail)
+  if (json.message) return json.message
+  return `Request failed (${res?.status || 'Unknown'})`
+}
+
+// ── Update Metadata ────────────────────────────────────────────
+
+/**
+ * Updates metadata for a document (e.g., category, file_name).
+ * Uses direct Supabase DB update with backend API fallback.
+ * @param {string} docId
+ * @param {string} userId
+ * @param {object} updates - { category?: string, file_name?: string }
+ * @returns {Promise<{data: object|null, error: string|null}>}
+ */
+export async function updateDocumentMetadata(docId, userId, updates) {
+  // 1. Direct Supabase DB update
+  const { data: sbData, error: sbError } = await supabase
+    .from('documents')
+    .update(updates)
+    .eq('id', docId)
+    .select()
+
+  if (!sbError && sbData && sbData.length > 0) {
+    // Notify backend asynchronously
+    fetch(`${API_BASE_URL}/documents/${docId}?user_id=${userId}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    }).catch(() => {})
+
+    return { data: sbData[0], error: null }
+  }
+
+  // 2. Try FastAPI backend API
+  const urlsToTry = [
+    `${API_BASE_URL}/documents/${docId}?user_id=${userId}`,
+    `http://localhost:8000/api/documents/${docId}?user_id=${userId}`,
+    `http://127.0.0.1:8000/api/documents/${docId}?user_id=${userId}`,
+  ]
+
+  for (const url of urlsToTry) {
+    try {
+      const res = await fetch(url, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates),
+      })
+      const json = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        return { data: null, error: formatErrorMessage(json, res) }
+      }
+      return { data: json, error: null }
+    } catch (e) {
+      // try next url
+    }
+  }
+
+  return { data: null, error: sbError ? sbError.message : 'Failed to reach server' }
+}
+
+// ── Overwrite File Content ────────────────────────────────────
+
+/**
+ * Overwrites / replaces document file content and re-queues AI processing.
+ * @param {string} docId
+ * @param {string} userId
+ * @param {File}   file
+ * @returns {Promise<{data: object|null, error: string|null}>}
+ */
+export async function overwriteDocument(docId, userId, file) {
+  const validation = validateFile(file)
+  if (!validation.valid) return { data: null, error: validation.error }
+
+  const urlsToTry = [
+    `${API_BASE_URL}/documents/${docId}/overwrite`,
+    `http://localhost:8000/api/documents/${docId}/overwrite`,
+    `http://127.0.0.1:8000/api/documents/${docId}/overwrite`,
+  ]
+
+  let lastError = 'Failed to fetch'
+  for (const url of urlsToTry) {
+    try {
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('user_id', userId)
+
+      const res = await fetch(url, {
+        method: 'POST',
+        body: formData,
+      })
+
+      const json = await res.json().catch(() => ({}))
+
+      if (!res.ok) {
+        return { data: null, error: formatErrorMessage(json, res) }
+      }
+
+      return { data: json.document, error: null }
+    } catch (err) {
+      lastError = err.message
+    }
+  }
+
+  return { data: null, error: lastError }
 }
 
 // ── Update Status (hook for Module 4) ────────────────────────

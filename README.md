@@ -11,7 +11,7 @@ Enterprise_AI_Assisstant/
 │   ├── package.json   # Frontend dependencies
 │   ├── .env           # Frontend environment variables
 │   └── ...
-├── backend/           # FastAPI backend (Groq LLM, FAISS vector search, Supabase)
+├── backend/           # FastAPI backend (Google Gemini / Groq LLM, FAISS vector search, Supabase)
 │   ├── api/           # Endpoints for documents, processing, chat, and RAG
 │   ├── database/      # Database client setup
 │   ├── models/        # Pydantic schemas

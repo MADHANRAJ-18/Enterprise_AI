@@ -33,6 +33,8 @@ import {
   deleteDocument,
   downloadDocument,
   triggerProcessingAll,
+  updateDocumentMetadata,
+  overwriteDocument,
 } from '../../services/documentService'
 
 // ── Stats card config ────────────────────────────────────────
@@ -88,6 +90,8 @@ export function DocumentsPage() {
   const [isBatchProcessing, setIsBatchProcessing] = useState(false)
   const [selectedDoc, setSelectedDoc] = useState(null) // for detail modal
   const [isDeletingDetail, setIsDeletingDetail] = useState(false)
+  const [isUpdatingDetail, setIsUpdatingDetail] = useState(false)
+  const [isOverwritingDetail, setIsOverwritingDetail] = useState(false)
 
   // ── Fetch documents ────────────────────────────────────────
   const fetchDocuments = useCallback(async (showLoading = true) => {
@@ -130,7 +134,7 @@ export function DocumentsPage() {
   }, [uploadQueue])
 
   // ── Upload handler ─────────────────────────────────────────
-  const handleUpload = async (files, category) => {
+  const handleUpload = async (files, category, scope = 'workspace') => {
     if (!user?.id || isUploading) return
     setIsUploading(true)
 
@@ -144,7 +148,7 @@ export function DocumentsPage() {
     }))
     setUploadQueue(queueItems)
 
-    // Upload files sequentially (Supabase RLS per user)
+    // Upload files sequentially
     const results = []
     for (let i = 0; i < files.length; i++) {
       const file = files[i]
@@ -158,7 +162,7 @@ export function DocumentsPage() {
 
       const onProgress = (pct) => updateItem({ progress: pct })
 
-      const { data, error } = await uploadDocument(file, category, user.id, onProgress)
+      const { data, error } = await uploadDocument(file, category, user.id, onProgress, scope)
 
       if (error) {
         updateItem({ status: 'error', error, progress: 100 })
@@ -174,7 +178,7 @@ export function DocumentsPage() {
       setDocuments((prev) => [...results, ...prev])
       const count = results.length
       showToast(
-        `${count} document${count > 1 ? 's' : ''} uploaded successfully!`,
+        `${count} document${count > 1 ? 's' : ''} uploaded to ${scope} scope successfully!`,
         'success'
       )
     }
@@ -201,6 +205,41 @@ export function DocumentsPage() {
     setIsDeletingDetail(false)
   }
 
+  // ── Update handler ─────────────────────────────────────────
+  const handleUpdate = async (doc, updates) => {
+    setIsUpdatingDetail(true)
+    const { data, error } = await updateDocumentMetadata(doc.id, user.id, updates)
+    setIsUpdatingDetail(false)
+    
+    if (error) {
+      showToast(`Failed to update: ${error}`, 'error')
+      return
+    }
+    
+    // Update local state
+    setDocuments((prev) => prev.map((d) => (d.id === doc.id ? { ...d, ...updates } : d)))
+    setSelectedDoc((prev) => ({ ...prev, ...updates }))
+    showToast(`Document updated successfully.`, 'success')
+  }
+
+  // ── Overwrite handler ──────────────────────────────────────
+  const handleOverwrite = async (doc, file) => {
+    if (!user?.id) return
+    setIsOverwritingDetail(true)
+    showToast(`Replacing content for "${doc.file_name}"...`, 'info')
+    const { data, error } = await overwriteDocument(doc.id, user.id, file)
+    setIsOverwritingDetail(false)
+
+    if (error) {
+      showToast(error, 'error')
+      return
+    }
+
+    setDocuments((prev) => prev.map((d) => (d.id === doc.id ? data : d)))
+    setSelectedDoc(data)
+    showToast(`File replaced successfully! Re-indexing AI knowledge...`, 'success')
+  }
+
   // ── Download handler ───────────────────────────────────────
   const handleDownload = async (doc) => {
     const { success, error } = await downloadDocument(doc)
@@ -221,6 +260,10 @@ export function DocumentsPage() {
         onDownload={handleDownload}
         onDelete={handleDeleteFromDetail}
         isDeleting={isDeletingDetail}
+        onUpdate={handleUpdate}
+        isUpdating={isUpdatingDetail}
+        onOverwrite={handleOverwrite}
+        isOverwriting={isOverwritingDetail}
       />
 
       <motion.div

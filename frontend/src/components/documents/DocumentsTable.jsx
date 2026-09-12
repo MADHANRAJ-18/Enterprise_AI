@@ -3,7 +3,7 @@
  * ─────────────────────────────────────────────────────────────
  * Searchable, sortable, filterable document management table.
  *
- * Columns: File Name · Category · File Type · File Size · Upload Date · Status · Actions
+ * Columns: File Name · Scope · Category · File Type · File Size · Upload Date · Status · Actions
  * Actions: View Details · Download · Delete (with confirmation)
  * ─────────────────────────────────────────────────────────────
  */
@@ -13,7 +13,8 @@ import { motion, AnimatePresence } from 'framer-motion'
 import {
   Search, ArrowUpDown, ArrowUp, ArrowDown,
   FileText, File, Eye, Download, Trash2,
-  FileSearch, ChevronLeft, ChevronRight, AlertTriangle
+  FileSearch, ChevronLeft, ChevronRight, AlertTriangle,
+  Building2, Lock
 } from 'lucide-react'
 import { Badge } from '../ui/Badge'
 import { Button } from '../ui/Button'
@@ -36,6 +37,12 @@ const FILE_TYPE_STYLE = {
 }
 
 const STATUS_FILTERS = ['All', 'Uploaded', 'Processing', 'Indexed', 'Failed']
+const SCOPE_FILTERS = [
+  { id: 'All', label: 'All Scopes' },
+  { id: 'company', label: '🏢 Company Knowledge', icon: Building2 },
+  { id: 'workspace', label: '🔒 My Workspace', icon: Lock },
+]
+
 const PAGE_SIZE = 10
 
 // ── Helpers ─────────────────────────────────────────────────
@@ -59,7 +66,7 @@ function SortIcon({ column, sortKey, sortDir }) {
 function SkeletonRows() {
   return Array.from({ length: 5 }).map((_, i) => (
     <tr key={i} className="border-b border-surface-50">
-      {Array.from({ length: 7 }).map((_, j) => (
+      {Array.from({ length: 8 }).map((_, j) => (
         <td key={j} className="px-4 py-3.5">
           <div className="h-4 bg-surface-200 rounded animate-pulse" style={{ width: j === 0 ? '80%' : '60%' }} />
         </td>
@@ -114,15 +121,9 @@ function DeleteConfirmDialog({ doc, onConfirm, onCancel, isDeleting }) {
 
 // ── Main Component ───────────────────────────────────────────
 
-/**
- * @param {Array}    documents  - All document rows
- * @param {boolean}  loading    - Loading state
- * @param {Function} onView     - Called with doc to open details panel
- * @param {Function} onDownload - Called with doc
- * @param {Function} onDelete   - Called with doc; returns Promise
- */
 export function DocumentsTable({ documents = [], loading, onView, onDownload, onDelete }) {
   const [search, setSearch] = useState('')
+  const [scopeFilter, setScopeFilter] = useState('All')
   const [statusFilter, setStatusFilter] = useState('All')
   const [categoryFilter, setCategoryFilter] = useState('All')
   const [sortKey, setSortKey] = useState('uploaded_at')
@@ -147,9 +148,10 @@ export function DocumentsTable({ documents = [], loading, onView, onDownload, on
     return documents
       .filter((d) => {
         const matchSearch = d.file_name.toLowerCase().includes(search.toLowerCase())
+        const matchScope = scopeFilter === 'All' || (d.scope || 'company') === scopeFilter
         const matchStatus = statusFilter === 'All' || d.status === statusFilter
         const matchCat = categoryFilter === 'All' || d.category === categoryFilter
-        return matchSearch && matchStatus && matchCat
+        return matchSearch && matchScope && matchStatus && matchCat
       })
       .sort((a, b) => {
         let aVal = a[sortKey]
@@ -168,7 +170,7 @@ export function DocumentsTable({ documents = [], loading, onView, onDownload, on
         if (aVal > bVal) return sortDir === 'asc' ? 1 : -1
         return 0
       })
-  }, [documents, search, statusFilter, categoryFilter, sortKey, sortDir])
+  }, [documents, search, scopeFilter, statusFilter, categoryFilter, sortKey, sortDir])
 
   // ── Pagination ────────────────────────────────────────────
   const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
@@ -202,7 +204,26 @@ export function DocumentsTable({ documents = [], loading, onView, onDownload, on
     <div>
       {/* Toolbar */}
       <div className="px-5 py-4 border-b border-surface-100 space-y-3">
-        {/* Row 1: search + status filter */}
+
+        {/* Row 1: Scope filter tabs */}
+        <div className="flex items-center gap-2 pb-1 border-b border-surface-100">
+          <span className="text-xs font-bold text-surface-400 uppercase tracking-wider mr-2">Scope:</span>
+          {SCOPE_FILTERS.map((s) => (
+            <button
+              key={s.id}
+              onClick={() => { setScopeFilter(s.id); setPage(1) }}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5
+                ${scopeFilter === s.id
+                  ? 'bg-primary-600 text-white shadow-sm shadow-primary-500/30'
+                  : 'bg-surface-100 text-surface-600 hover:bg-surface-200'
+                }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Row 2: Search + status filter */}
         <div className="flex items-center gap-3 flex-wrap">
           {/* Search */}
           <div className="relative flex-1 min-w-48">
@@ -234,7 +255,7 @@ export function DocumentsTable({ documents = [], loading, onView, onDownload, on
           </div>
         </div>
 
-        {/* Row 2: category pills */}
+        {/* Row 3: Category pills */}
         <CategoryFilter
           activeCategory={categoryFilter}
           onChange={(cat) => { setCategoryFilter(cat); setPage(1) }}
@@ -248,6 +269,7 @@ export function DocumentsTable({ documents = [], loading, onView, onDownload, on
           <thead>
             <tr className="border-b border-surface-100">
               <Th label="File Name" sortable col="file_name" className="pl-5" />
+              <Th label="Scope" />
               <Th label="Category" />
               <Th label="Type" />
               <Th label="Size" sortable col="file_size" className="hidden sm:table-cell" />
@@ -261,14 +283,14 @@ export function DocumentsTable({ documents = [], loading, onView, onDownload, on
               <SkeletonRows />
             ) : paginated.length === 0 ? (
               <tr>
-                <td colSpan={7} className="py-16 text-center">
+                <td colSpan={8} className="py-16 text-center">
                   <div className="flex flex-col items-center gap-3">
                     <div className="w-14 h-14 rounded-2xl bg-surface-100 border border-surface-200 flex items-center justify-center">
                       <FileSearch size={24} className="text-surface-400" />
                     </div>
                     <p className="text-sm font-semibold text-surface-600">No documents found</p>
                     <p className="text-xs text-surface-400 max-w-xs">
-                      {search || statusFilter !== 'All' || categoryFilter !== 'All'
+                      {search || scopeFilter !== 'All' || statusFilter !== 'All' || categoryFilter !== 'All'
                         ? 'Try adjusting your search or filters.'
                         : 'Upload your first document using the zone above.'}
                     </p>
@@ -280,6 +302,7 @@ export function DocumentsTable({ documents = [], loading, onView, onDownload, on
                 {paginated.map((doc) => {
                   const fileStyle = FILE_TYPE_STYLE[doc.file_type] || { color: 'text-surface-500', bg: 'bg-surface-100 border-surface-200' }
                   const statusCfg = STATUS_CONFIG[doc.status] || { variant: 'gray', dot: 'bg-surface-300' }
+                  const isCompanyScope = (doc.scope || 'company') === 'company'
 
                   return (
                     <motion.tr
@@ -303,6 +326,19 @@ export function DocumentsTable({ documents = [], loading, onView, onDownload, on
                             <p className="text-xs text-surface-400">ID: {doc.id.slice(0, 8)}…</p>
                           </div>
                         </div>
+                      </td>
+
+                      {/* Scope Badge */}
+                      <td className="px-4 py-3.5">
+                        {isCompanyScope ? (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-indigo-700 bg-indigo-50 border border-indigo-100 px-2 py-1 rounded-lg">
+                            <Building2 size={11} /> Company
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs font-bold text-slate-700 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg">
+                            <Lock size={11} /> Workspace
+                          </span>
+                        )}
                       </td>
 
                       {/* Category */}

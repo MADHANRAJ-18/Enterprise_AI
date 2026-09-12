@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { User, Mail, Lock, Camera, Shield, CheckCircle, Chrome, Eye, EyeOff } from 'lucide-react'
+import { User, Mail, Lock, Camera, Shield, CheckCircle, Chrome, Eye, EyeOff, ExternalLink } from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
+import { supabase } from '../../lib/supabaseClient'
 import { Card, CardHeader, CardBody, CardFooter } from '../../components/ui/Card'
 import { Button } from '../../components/ui/Button'
 import { Input } from '../../components/ui/Input'
@@ -32,12 +33,25 @@ export function ProfilePage() {
   const [saved, setSaved] = useState(false)
   const [pwError, setPwError] = useState('')
 
-  const hasGoogle = user?.app_metadata?.providers?.includes('google') || user?.user_metadata?.avatar_url
+  const isGoogleUser =
+    user?.app_metadata?.provider === 'google' ||
+    user?.app_metadata?.providers?.includes('google') ||
+    user?.identities?.some((id) => id.provider === 'google') ||
+    Boolean(user?.user_metadata?.avatar_url && !user?.app_metadata?.provider)
+
+  const hasGoogle = isGoogleUser || Boolean(user?.user_metadata?.avatar_url)
 
   const handleSaveProfile = async (e) => {
     e.preventDefault()
     setLoading(true)
-    await new Promise((r) => setTimeout(r, 1000)) // Simulate API
+    try {
+      const { error } = await supabase.auth.updateUser({
+        data: { full_name: displayName, display_name: displayName }
+      })
+      if (error) console.warn('[ProfilePage] profile metadata update:', error)
+    } catch (err) {
+      console.warn('[ProfilePage] update error:', err)
+    }
     setLoading(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 3000)
@@ -49,11 +63,17 @@ export function ProfilePage() {
     if (newPw !== confirmPw) { setPwError('Passwords do not match'); return }
     if (newPw.length < 8) { setPwError('Password must be at least 8 characters'); return }
     setPwLoading(true)
-    await new Promise((r) => setTimeout(r, 1000))
-    setPwLoading(false)
-    setCurrentPw(''); setNewPw(''); setConfirmPw('')
-    setSaved(true)
-    setTimeout(() => setSaved(false), 3000)
+    try {
+      const { error } = await supabase.auth.updateUser({ password: newPw })
+      if (error) throw error
+      setCurrentPw(''); setNewPw(''); setConfirmPw('')
+      setSaved(true)
+      setTimeout(() => setSaved(false), 3000)
+    } catch (err) {
+      setPwError(err.message || 'Failed to update password')
+    } finally {
+      setPwLoading(false)
+    }
   }
 
   return (
@@ -119,52 +139,88 @@ export function ProfilePage() {
         </CardBody>
       </Card>
 
-      {/* Change password */}
+      {/* Change password / Account Security */}
       <Card>
         <CardHeader>
           <div className="flex items-center gap-2">
             <Lock size={15} className="text-surface-400" />
-            <h2 className="text-sm font-semibold text-surface-900">Change Password</h2>
+            <h2 className="text-sm font-semibold text-surface-900">
+              {isGoogleUser ? 'Account Security' : 'Change Password'}
+            </h2>
           </div>
         </CardHeader>
         <CardBody>
-          <form onSubmit={handleChangePassword} className="space-y-4">
-            <Input
-              label="Current Password"
-              type={showPw ? 'text' : 'password'}
-              value={currentPw}
-              onChange={(e) => setCurrentPw(e.target.value)}
-              placeholder="Enter current password"
-              prefix={<Lock size={15} />}
-              suffix={
-                <button type="button" onClick={() => setShowPw((p) => !p)} className="cursor-pointer">
-                  {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
-                </button>
-              }
-            />
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <Input
-                label="New Password"
-                type={showPw ? 'text' : 'password'}
-                value={newPw}
-                onChange={(e) => setNewPw(e.target.value)}
-                placeholder="Min. 8 characters"
-                prefix={<Lock size={15} />}
-              />
-              <Input
-                label="Confirm New Password"
-                type={showPw ? 'text' : 'password'}
-                value={confirmPw}
-                onChange={(e) => setConfirmPw(e.target.value)}
-                placeholder="Repeat new password"
-                prefix={<Lock size={15} />}
-                error={pwError}
-              />
+          {isGoogleUser ? (
+            <div className="p-4 rounded-xl bg-surface-50 border border-surface-200/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div className="flex items-start gap-3.5">
+                <div className="w-10 h-10 rounded-xl bg-white border border-surface-200 flex items-center justify-center flex-shrink-0 shadow-sm">
+                  <svg className="w-5 h-5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  </svg>
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <p className="text-sm font-semibold text-surface-900">Managed by Google</p>
+                    <Badge variant="green" size="sm"><CheckCircle size={10} /> Active</Badge>
+                  </div>
+                  <p className="text-xs text-surface-500 mt-1 leading-relaxed">
+                    You signed in with Google (<span className="text-surface-700 font-medium">{user?.email}</span>). 
+                    Your account security and password management are handled securely by Google Sign-In, so you do not need a separate password.
+                  </p>
+                </div>
+              </div>
+              <a
+                href="https://myaccount.google.com/security"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-medium bg-white text-surface-700 hover:text-surface-900 hover:bg-surface-100 border border-surface-300 shadow-sm transition-colors flex-shrink-0"
+              >
+                <ExternalLink size={13} />
+                Manage Google Account
+              </a>
             </div>
-            <div className="flex justify-end">
-              <Button type="submit" loading={pwLoading} variant="secondary">Update Password</Button>
-            </div>
-          </form>
+          ) : (
+            <form onSubmit={handleChangePassword} className="space-y-4">
+              <Input
+                label="Current Password"
+                type={showPw ? 'text' : 'password'}
+                value={currentPw}
+                onChange={(e) => setCurrentPw(e.target.value)}
+                placeholder="Enter current password"
+                prefix={<Lock size={15} />}
+                suffix={
+                  <button type="button" onClick={() => setShowPw((p) => !p)} className="cursor-pointer">
+                    {showPw ? <EyeOff size={15} /> : <Eye size={15} />}
+                  </button>
+                }
+              />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <Input
+                  label="New Password"
+                  type={showPw ? 'text' : 'password'}
+                  value={newPw}
+                  onChange={(e) => setNewPw(e.target.value)}
+                  placeholder="Min. 8 characters"
+                  prefix={<Lock size={15} />}
+                />
+                <Input
+                  label="Confirm New Password"
+                  type={showPw ? 'text' : 'password'}
+                  value={confirmPw}
+                  onChange={(e) => setConfirmPw(e.target.value)}
+                  placeholder="Repeat new password"
+                  prefix={<Lock size={15} />}
+                  error={pwError}
+                />
+              </div>
+              <div className="flex justify-end">
+                <Button type="submit" loading={pwLoading} variant="secondary">Update Password</Button>
+              </div>
+            </form>
+          )}
         </CardBody>
       </Card>
 

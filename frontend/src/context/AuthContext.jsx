@@ -7,12 +7,50 @@ export function AuthProvider({ children }) {
   const [user, setUser] = useState(null)
   const [session, setSession] = useState(null)
   const [loading, setLoading] = useState(true)
+  // ── Role & company (Module 7 prep) ───────────────────────
+  const [userRole, setUserRole] = useState(null)       // 'knowledge_admin' | 'employee'
+  const [companyId, setCompanyId] = useState(null)     // UUID of the user's company
+
+  /**
+   * Fetch role and company_id from the user_profiles table.
+   * Called on login and on auth state change.
+   */
+  const fetchUserProfile = async (userId) => {
+    if (!userId) {
+      setUserRole(null)
+      setCompanyId(null)
+      return
+    }
+    try {
+      const { data, error } = await supabase
+        .from('user_profiles')
+        .select('role, company_id')
+        .eq('user_id', userId)
+        .limit(1)
+        .single()
+
+      if (error || !data) {
+        // Profile may not exist yet (e.g. trigger hasn't run) — default safely
+        console.warn('[AuthContext] user_profiles not found for user', userId)
+        setUserRole('employee')
+        setCompanyId(null)
+      } else {
+        setUserRole(data.role || 'employee')
+        setCompanyId(data.company_id || null)
+      }
+    } catch (err) {
+      console.error('[AuthContext] fetchUserProfile error:', err)
+      setUserRole('employee')
+      setCompanyId(null)
+    }
+  }
 
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
       setUser(session?.user ?? null)
+      fetchUserProfile(session?.user?.id ?? null)
       setLoading(false)
     })
 
@@ -21,6 +59,7 @@ export function AuthProvider({ children }) {
       (_event, session) => {
         setSession(session)
         setUser(session?.user ?? null)
+        fetchUserProfile(session?.user?.id ?? null)
         setLoading(false)
       }
     )
@@ -85,10 +124,18 @@ export function AuthProvider({ children }) {
     return user?.user_metadata?.avatar_url || user?.user_metadata?.picture || null
   }
 
+  /** Returns true if the current user is a Knowledge Admin */
+  const isKnowledgeAdmin = () => userRole === 'knowledge_admin'
+
   const value = {
     user,
     session,
     loading,
+    // ── Role & company (Module 7 prep) ─────────────────────
+    userRole,
+    companyId,
+    isKnowledgeAdmin,
+    // ── Auth methods ───────────────────────────────────────
     signInWithGoogle,
     signInWithEmail,
     signUpWithEmail,

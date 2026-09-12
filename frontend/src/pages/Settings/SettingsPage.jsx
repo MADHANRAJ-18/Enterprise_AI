@@ -9,6 +9,8 @@ import { Button } from '../../components/ui/Button'
 import { Badge } from '../../components/ui/Badge'
 import { Modal } from '../../components/ui/Modal'
 import { checkRAGHealth } from '../../services/chatService'
+import { useAuth } from '../../context/AuthContext'
+import { fetchUserPreferences, updateUserPreferences } from '../../services/notificationService'
 import { supabase } from '../../lib/supabaseClient'
 
 const SETTINGS_STORAGE_KEY = 'enterprise_ai_settings'
@@ -19,9 +21,7 @@ const DEFAULT_SETTINGS = {
   streamingEnabled: true,
   ragEnabled: true,
   citationsEnabled: true,
-  emailNotifs: true,
-  weeklyDigest: true,
-  mentionAlerts: true,
+  companyFileUpdates: true,
   sessionTimeout: '30',
   apiLogging: true,
 }
@@ -83,6 +83,12 @@ function SaveToast({ show, message = 'Settings saved!' }) {
 }
 
 export function SettingsPage() {
+  const { user } = useAuth()
+  const isGoogleUser = Boolean(
+    user?.app_metadata?.provider === 'google' ||
+    user?.app_metadata?.providers?.includes('google') ||
+    user?.identities?.some((id) => id.provider === 'google')
+  )
   const [activeSection, setActiveSection] = useState('ai')
   const [saved, setSaved] = useState(false)
   const [toastMsg, setToastMsg] = useState('Settings saved!')
@@ -104,12 +110,22 @@ export function SettingsPage() {
     try {
       const savedSettings = localStorage.getItem(SETTINGS_STORAGE_KEY)
       if (savedSettings) {
-        setSettings({ ...DEFAULT_SETTINGS, ...JSON.parse(savedSettings) })
+        setSettings((prev) => ({ ...prev, ...JSON.parse(savedSettings) }))
       }
     } catch (e) {
       console.error('Failed to parse settings from localStorage', e)
     }
-  }, [])
+
+    // Load user preferences from Supabase
+    if (user?.id) {
+      fetchUserPreferences(user.id).then(({ company_file_updates }) => {
+        setSettings((prev) => ({
+          ...prev,
+          companyFileUpdates: company_file_updates !== false,
+        }))
+      })
+    }
+  }, [user?.id])
 
   const triggerToast = (msg = 'Settings saved!') => {
     setToastMsg(msg)
@@ -120,19 +136,43 @@ export function SettingsPage() {
   const set = (key) => (val) => setSettings((prev) => ({ ...prev, [key]: val }))
   const setToggle = (key) => (val) => setSettings((prev) => ({ ...prev, [key]: val }))
 
-  const handleSave = () => {
+  const handleSave = async () => {
+    // Persist general settings to localStorage
     localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings))
     window.dispatchEvent(new Event('settings_updated'))
+
+    // Persist notification preference to Supabase user_preferences table
+    if (user?.id) {
+      try {
+        await updateUserPreferences(user.id, {
+          company_file_updates: settings.companyFileUpdates,
+        })
+      } catch (err) {
+        console.error('Failed to persist notification preference to Supabase:', err)
+      }
+    }
+
     triggerToast('Settings saved successfully!')
   }
 
-  const handleReset = () => {
+  const handleReset = async () => {
     if (window.confirm('Reset all settings to default factory values?')) {
       setSettings(DEFAULT_SETTINGS)
       localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(DEFAULT_SETTINGS))
       window.dispatchEvent(new Event('settings_updated'))
       setHealthResult(null)
       setHealthError(null)
+
+      if (user?.id) {
+        try {
+          await updateUserPreferences(user.id, {
+            company_file_updates: true,
+          })
+        } catch (err) {
+          console.error('Failed to reset notification preference in Supabase:', err)
+        }
+      }
+
       triggerToast('All settings reset to defaults!')
     }
   }
@@ -279,16 +319,14 @@ export function SettingsPage() {
       case 'notifications':
         return (
           <div>
-            <SettingRow label="Email Notifications" description="Receive summary updates and processing alerts via email">
-              <Toggle checked={settings.emailNotifs} onChange={setToggle('emailNotifs')} />
-            </SettingRow>
-
-            <SettingRow label="Weekly Digest" description="Receive an activity & analytics summary every Monday morning">
-              <Toggle checked={settings.weeklyDigest} onChange={setToggle('weeklyDigest')} />
-            </SettingRow>
-
-            <SettingRow label="Document Processing Alerts" description="Notify immediately when document indexing completes">
-              <Toggle checked={settings.mentionAlerts} onChange={setToggle('mentionAlerts')} />
+            <SettingRow
+              label="Company File Updates"
+              description="Notify me when company documents I have access to are added, updated, or removed."
+            >
+              <Toggle
+                checked={settings.companyFileUpdates}
+                onChange={setToggle('companyFileUpdates')}
+              />
             </SettingRow>
           </div>
         )
@@ -310,10 +348,29 @@ export function SettingsPage() {
               </select>
             </SettingRow>
 
-            <SettingRow label="Password & Credentials" description="Update your account login password">
-              <Button variant="secondary" size="sm" onClick={() => setIsPasswordModalOpen(true)}>
-                <Key size={13} /> Change Password
-              </Button>
+            <SettingRow
+              label="Password & Credentials"
+              description={
+                isGoogleUser
+                  ? "Your account authentication is managed securely via Google Sign-In."
+                  : "Update your account login password"
+              }
+            >
+              {isGoogleUser ? (
+                <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-surface-100 text-surface-600 border border-surface-200">
+                  <svg className="w-3.5 h-3.5" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.66-5.17 3.66-9.17z"/>
+                    <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.25v3.15C3.26 21.36 7.33 24 12 24z"/>
+                    <path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.25C.45 8.18 0 9.99 0 12s.45 3.82 1.25 5.42l4.03-3.15z"/>
+                    <path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.33 0 3.26 2.64 1.25 6.58l4.03 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/>
+                  </svg>
+                  Managed by Google
+                </span>
+              ) : (
+                <Button variant="secondary" size="sm" onClick={() => setIsPasswordModalOpen(true)}>
+                  <Key size={13} /> Change Password
+                </Button>
+              )}
             </SettingRow>
           </div>
         )

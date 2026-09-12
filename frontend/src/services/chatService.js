@@ -21,10 +21,17 @@ async function safeFetch(url, options = {}) {
   try {
     res = await fetch(url, options)
   } catch (err) {
+    // If the server is momentarily reloading/starting, retry once after 600ms
     if (err.name === 'TypeError' || err.message?.includes('Failed to fetch')) {
-      throw new Error(`Cannot connect to AI backend at ${API_BASE_URL}. Please ensure the Python FastAPI server is running on port 8000.`)
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 600))
+        res = await fetch(url, options)
+      } catch (_) {
+        throw new Error(`Cannot connect to AI backend at ${API_BASE_URL}. Please ensure the Python FastAPI server is running on port 8000.`)
+      }
+    } else {
+      throw err
     }
-    throw err
   }
 
   if (!res.ok) {
@@ -148,3 +155,133 @@ export async function parseChatFile(file) {
     body:   formData,
   })
 }
+
+// ── Conversation management (Module 9 – Chat History) ─────────
+
+/**
+ * Fetch all conversations for the authenticated user.
+ * GET /api/conversations?user_id=:uid
+ *
+ * @param {string} userId
+ * @returns {Promise<{ conversations: Array, total: number }>}
+ */
+export async function fetchConversations(userId) {
+  return safeFetch(`${API_BASE_URL}/api/conversations?user_id=${encodeURIComponent(userId)}`)
+}
+
+/**
+ * Fetch all messages for a specific conversation.
+ * GET /api/conversations/:id/messages?user_id=:uid
+ *
+ * @param {string} convId
+ * @param {string} userId
+ * @returns {Promise<{ messages: Array, total: number, conversation_id: string }>}
+ */
+export async function fetchMessages(convId, userId) {
+  return safeFetch(
+    `${API_BASE_URL}/api/conversations/${encodeURIComponent(convId)}/messages?user_id=${encodeURIComponent(userId)}`
+  )
+}
+
+/**
+ * Create a new conversation for the authenticated user.
+ * POST /api/conversations
+ *
+ * @param {string} userId
+ * @param {string} title
+ * @returns {Promise<{ success: boolean, conversation: object }>}
+ */
+export async function createConversation(userId, title = 'New Conversation') {
+  return safeFetch(`${API_BASE_URL}/api/conversations`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ user_id: userId, title }),
+  })
+}
+
+/**
+ * Append a message (user or assistant) to a conversation.
+ * POST /api/conversations/:id/messages
+ *
+ * @param {string} convId
+ * @param {string} userId
+ * @param {string} role 'user' | 'assistant'
+ * @param {string} content
+ * @param {Array|null} sources
+ * @returns {Promise<{ success: boolean, message: object }>}
+ */
+export async function appendMessage(convId, userId, role, content, sources = null) {
+  return safeFetch(`${API_BASE_URL}/api/conversations/${encodeURIComponent(convId)}/messages`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      user_id: userId,
+      role,
+      content,
+      sources: sources && sources.length > 0 ? sources : null,
+    }),
+  })
+}
+
+/**
+ * Generate a dynamic 3-5 word title for a conversation using LLM.
+ * POST /api/conversations/:id/generate-title
+ *
+ * @param {string} convId
+ * @param {string} userId
+ * @param {string} userMessage
+ * @returns {Promise<{ success: boolean, title: string }>}
+ */
+export async function generateConversationTitle(convId, userId, userMessage) {
+  return safeFetch(`${API_BASE_URL}/api/conversations/${encodeURIComponent(convId)}/generate-title`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({
+      user_id:      userId,
+      user_message: userMessage,
+    }),
+  })
+}
+
+/**
+ * Delete a conversation and all its messages.
+ * DELETE /api/conversations/:id?user_id=:uid
+ *
+ * @param {string} convId
+ * @param {string} userId
+ * @returns {Promise<void>}  — 204 No Content; safeFetch handles non-JSON 204 gracefully.
+ */
+export async function deleteConversation(convId, userId) {
+  // 204 returns no body — wrap safeFetch to handle the empty response
+  let res
+  try {
+    res = await fetch(
+      `${API_BASE_URL}/api/conversations/${encodeURIComponent(convId)}?user_id=${encodeURIComponent(userId)}`,
+      { method: 'DELETE' }
+    )
+  } catch (err) {
+    if (err.name === 'TypeError' || err.message?.includes('Failed to fetch')) {
+      try {
+        await new Promise((resolve) => setTimeout(resolve, 600))
+        res = await fetch(
+          `${API_BASE_URL}/api/conversations/${encodeURIComponent(convId)}?user_id=${encodeURIComponent(userId)}`,
+          { method: 'DELETE' }
+        )
+      } catch (_) {
+        throw new Error(`Cannot connect to AI backend at ${API_BASE_URL}. Please ensure the Python FastAPI server is running on port 8000.`)
+      }
+    } else {
+      throw err
+    }
+  }
+  if (!res.ok && res.status !== 204) {
+    let detail = `HTTP ${res.status}`
+    try {
+      const data = await res.json()
+      detail = data.detail || data.message || detail
+    } catch (_) {}
+    throw new Error(detail)
+  }
+  // 204 — success, no body
+}
+

@@ -142,3 +142,55 @@
     @apply inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full bg-surface-200 text-surface-600;
   }
 }
+
+/* ── PDF Text Layer & Citation Highlight ──────────────────── */
+.textLayer {
+  opacity: 1 !important;
+  position: absolute !important;
+  text-align: initial !important;
+  left: 0 !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  overflow: hidden !important;
+  line-height: 1 !important;
+  -webkit-text-size-adjust: none;
+  -moz-text-size-adjust: none;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0 !important;
+  z-index: 2 !important;
+  pointer-events: auto !important;
+}
+
+.textLayer span,
+.textLayer span.markedContent {
+  color: transparent !important;
+  position: absolute !important;
+  white-space: pre !important;
+  cursor: text !important;
+  transform-origin: 0% 0% !important;
+}
+
+.textLayer span::selection {
+  background: rgba(59, 130, 246, 0.35) !important;
+  color: transparent !important;
+}
+
+.textLayer .pdf-citation-highlight {
+  background-color: rgba(254, 240, 138, 0.65) !important;
+  color: transparent !important;
+  mix-blend-mode: multiply;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.dark .textLayer .pdf-citation-highlight {
+  background-color: rgba(250, 204, 21, 0.48) !important;
+  color: transparent !important;
+  mix-blend-mode: multiply;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  outline: none !important;
+}

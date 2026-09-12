@@ -1,18 +1,49 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Search, Bell, ChevronDown, User, Settings, LogOut, CheckCircle, XCircle, Info, Moon, Sun } from 'lucide-react'
+import {
+  Search, Bell, ChevronDown, User, Settings, LogOut,
+  FileText, Check, Moon, Sun, CheckCheck
+} from 'lucide-react'
 import { useAuth } from '../../context/AuthContext'
 import { useTheme } from '../../context/ThemeContext'
 import { Avatar } from '../ui/Avatar'
-import { mockNotifications } from '../../data/mockData'
+import {
+  fetchNotifications,
+  markNotificationAsRead,
+  markAllNotificationsAsRead,
+  subscribeToNotifications,
+} from '../../services/notificationService'
 
-function NotificationPanel({ onClose }) {
-  const unreadCount = mockNotifications.filter((n) => !n.read).length
-  const typeIcon = {
-    success: <CheckCircle size={14} className="text-emerald-500" />,
-    error: <XCircle size={14} className="text-red-500" />,
-    info: <Info size={14} className="text-primary-500" />,
+function formatNotificationTime(dateStr) {
+  if (!dateStr) return ''
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diffMinutes = Math.floor((now - date) / 60000)
+  if (diffMinutes < 1) return 'Just now'
+  if (diffMinutes < 60) return `${diffMinutes}m ago`
+  const diffHours = Math.floor(diffMinutes / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+  const diffDays = Math.floor(diffHours / 24)
+  if (diffDays < 7) return `${diffDays}d ago`
+  return date.toLocaleDateString()
+}
+
+function NotificationPanel({
+  notifications,
+  unreadCount,
+  onMarkAsRead,
+  onMarkAllAsRead,
+  onClose,
+}) {
+  const navigate = useNavigate()
+
+  const handleNotificationClick = async (notif) => {
+    if (!notif.is_read) {
+      await onMarkAsRead(notif.id)
+    }
+    navigate('/documents')
+    onClose()
   }
 
   return (
@@ -21,25 +52,52 @@ function NotificationPanel({ onClose }) {
       animate={{ opacity: 1, y: 0, scale: 1 }}
       exit={{ opacity: 0, y: 8, scale: 0.96 }}
       transition={{ duration: 0.15 }}
-      className="absolute right-0 top-full mt-2 w-80 bg-surface-100 rounded-2xl shadow-2xl border border-surface-200/60 z-50 overflow-hidden"
+      className="absolute right-0 top-full mt-2 w-84 bg-surface-100 rounded-2xl shadow-2xl border border-surface-200/60 z-50 overflow-hidden"
     >
       <div className="px-4 py-3 border-b border-surface-100 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-surface-900">Notifications</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-surface-900">Notifications</h3>
+          {unreadCount > 0 && (
+            <span className="px-1.5 py-0.5 rounded-md text-[11px] font-bold bg-primary-100 text-primary-700">
+              {unreadCount} new
+            </span>
+          )}
+        </div>
         {unreadCount > 0 && (
-          <span className="text-xs font-medium text-primary-600">{unreadCount} unread</span>
+          <button
+            onClick={onMarkAllAsRead}
+            className="flex items-center gap-1 text-xs font-medium text-surface-500 hover:text-primary-600 transition-colors"
+          >
+            <CheckCheck size={14} /> Mark all read
+          </button>
         )}
       </div>
+
       <div className="max-h-80 overflow-y-auto divide-y divide-surface-100">
-        {mockNotifications.length > 0 ? (
-          mockNotifications.map((n) => (
-            <div key={n.id} className={`flex gap-3 px-4 py-3 hover:bg-surface-50 transition-colors cursor-pointer ${!n.read ? 'bg-primary-50/30' : ''}`}>
-              <div className="flex-shrink-0 mt-0.5">{typeIcon[n.type]}</div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-surface-900">{n.title}</p>
-                <p className="text-xs text-surface-500 mt-0.5 leading-relaxed">{n.message}</p>
-                <p className="text-xs text-surface-400 mt-1">{n.time}</p>
+        {notifications.length > 0 ? (
+          notifications.map((n) => (
+            <div
+              key={n.id}
+              onClick={() => handleNotificationClick(n)}
+              className={`flex gap-3 px-4 py-3 hover:bg-surface-50 transition-colors cursor-pointer ${
+                !n.is_read ? 'bg-primary-50/25' : ''
+              }`}
+            >
+              <div className="flex-shrink-0 mt-0.5 p-1.5 rounded-lg bg-primary-100 text-primary-600">
+                <FileText size={14} />
               </div>
-              {!n.read && <div className="w-2 h-2 rounded-full bg-primary-500 flex-shrink-0 mt-1.5" />}
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-1">
+                  <p className="text-xs font-semibold text-surface-900 truncate">{n.title}</p>
+                  <span className="text-[10px] text-surface-400 flex-shrink-0">
+                    {formatNotificationTime(n.created_at)}
+                  </span>
+                </div>
+                <p className="text-xs text-surface-600 mt-0.5 leading-relaxed">{n.message}</p>
+              </div>
+              {!n.is_read && (
+                <div className="w-2 h-2 rounded-full bg-primary-500 flex-shrink-0 mt-1.5" />
+              )}
             </div>
           ))
         ) : (
@@ -48,9 +106,16 @@ function NotificationPanel({ onClose }) {
           </div>
         )}
       </div>
-      <div className="px-4 py-2.5 border-t border-surface-100 text-center">
-        <button className="text-xs font-medium text-primary-600 hover:text-primary-700 transition-colors">
-          View all notifications
+
+      <div className="px-4 py-2.5 border-t border-surface-100 text-center bg-surface-50/50">
+        <button
+          onClick={() => {
+            navigate('/documents')
+            onClose()
+          }}
+          className="text-xs font-medium text-primary-600 hover:text-primary-700 transition-colors"
+        >
+          View Company Documents
         </button>
       </div>
     </motion.div>
@@ -75,7 +140,6 @@ function UserMenu({ onClose }) {
       transition={{ duration: 0.15 }}
       className="absolute right-0 top-full mt-2 w-64 bg-surface-100 rounded-2xl shadow-2xl border border-surface-200/60 z-50 overflow-hidden"
     >
-      {/* User info */}
       <div className="px-4 py-4 border-b border-surface-100">
         <div className="flex items-center gap-3">
           <Avatar src={getUserAvatar()} name={getUserDisplayName()} size="lg" />
@@ -85,7 +149,6 @@ function UserMenu({ onClose }) {
           </div>
         </div>
       </div>
-      {/* Menu items */}
       <div className="p-2">
         <button
           onClick={() => { navigate('/profile'); onClose() }}
@@ -112,16 +175,56 @@ function UserMenu({ onClose }) {
 }
 
 export function Navbar() {
-  const { getUserDisplayName, getUserAvatar } = useAuth()
+  const { user, getUserDisplayName, getUserAvatar } = useAuth()
   const { isDark, toggleTheme } = useTheme()
   const [showNotifs, setShowNotifs] = useState(false)
   const [showMenu, setShowMenu] = useState(false)
   const [search, setSearch] = useState('')
+  const [notifications, setNotifications] = useState([])
+  const [unreadCount, setUnreadCount] = useState(0)
   const notifsRef = useRef(null)
   const menuRef = useRef(null)
-  const unreadCount = mockNotifications.filter((n) => !n.read).length
 
-  // Close dropdowns on outside click
+  // ── Load Notifications ─────────────────────────────────────
+  const loadNotifications = useCallback(async () => {
+    if (!user?.id) return
+    const { data, unreadCount: count } = await fetchNotifications(user.id, { limit: 20 })
+    setNotifications(data || [])
+    setUnreadCount(count || 0)
+  }, [user?.id])
+
+  useEffect(() => {
+    loadNotifications()
+
+    if (!user?.id) return
+    // Subscribe to realtime changes in notifications table
+    const unsubscribe = subscribeToNotifications(user.id, () => {
+      loadNotifications()
+    })
+
+    return () => {
+      if (typeof unsubscribe === 'function') unsubscribe()
+    }
+  }, [user?.id, loadNotifications])
+
+  // ── Mark as Read Handlers ──────────────────────────────────
+  const handleMarkAsRead = async (notificationId) => {
+    if (!user?.id) return
+    await markNotificationAsRead(user.id, notificationId)
+    setNotifications((prev) =>
+      prev.map((n) => (n.id === notificationId ? { ...n, is_read: true } : n))
+    )
+    setUnreadCount((prev) => Math.max(0, prev - 1))
+  }
+
+  const handleMarkAllAsRead = async () => {
+    if (!user?.id) return
+    await markAllNotificationsAsRead(user.id)
+    setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
+    setUnreadCount(0)
+  }
+
+  // ── Close dropdowns on outside click ───────────────────────
   useEffect(() => {
     const handler = (e) => {
       if (notifsRef.current && !notifsRef.current.contains(e.target)) setShowNotifs(false)
@@ -155,16 +258,25 @@ export function Navbar() {
             id="notifications-btn"
             onClick={() => { setShowNotifs((p) => !p); setShowMenu(false) }}
             className="relative p-2 rounded-xl text-surface-500 hover:bg-surface-100 hover:text-surface-800 transition-colors"
+            title="Notifications"
           >
             <Bell size={18} />
             {unreadCount > 0 && (
-              <span className="absolute top-1 right-1 w-4 h-4 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center">
-                {unreadCount}
+              <span className="absolute top-1 right-1 min-w-4 h-4 px-1 rounded-full bg-primary-600 text-white text-[10px] font-bold flex items-center justify-center shadow-sm">
+                {unreadCount > 99 ? '99+' : unreadCount}
               </span>
             )}
           </button>
           <AnimatePresence>
-            {showNotifs && <NotificationPanel onClose={() => setShowNotifs(false)} />}
+            {showNotifs && (
+              <NotificationPanel
+                notifications={notifications}
+                unreadCount={unreadCount}
+                onMarkAsRead={handleMarkAsRead}
+                onMarkAllAsRead={handleMarkAllAsRead}
+                onClose={() => setShowNotifs(false)}
+              />
+            )}
           </AnimatePresence>
         </div>
 

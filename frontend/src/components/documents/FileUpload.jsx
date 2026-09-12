@@ -3,14 +3,15 @@
  * ─────────────────────────────────────────────────────────────
  * Drag-and-drop upload zone with browse button.
  * Validates file type (PDF, DOCX, TXT) and size (≤ 20 MB) client-side.
- * Accepts a category selector for the upload.
+ * Accepts category and scope selectors for the upload.
  * ─────────────────────────────────────────────────────────────
  */
 
 import { useState, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Upload, FileText, File, CloudUpload, AlertCircle, FolderOpen } from 'lucide-react'
+import { Upload, FileText, File, CloudUpload, AlertCircle, FolderOpen, Shield, Lock, Building2 } from 'lucide-react'
 import { validateFile, CATEGORIES } from '../../services/documentService'
+import { useAuth } from '../../context/AuthContext'
 import { Button } from '../ui/Button'
 
 const FILE_TYPE_ICONS = {
@@ -24,8 +25,12 @@ function getFileExt(name) {
 }
 
 export function FileUpload({ onUpload, isUploading }) {
+  const { isKnowledgeAdmin } = useAuth()
+  const isAdmin = isKnowledgeAdmin()
+
   const [isDragging, setIsDragging] = useState(false)
   const [category, setCategory] = useState('General')
+  const [scope, setScope] = useState('workspace') // 'workspace' | 'company'
   const [stagedFiles, setStagedFiles] = useState([]) // files ready to upload
   const [validationErrors, setValidationErrors] = useState([])
   const inputRef = useRef(null)
@@ -39,7 +44,6 @@ export function FileUpload({ onUpload, isUploading }) {
 
   const handleDragLeave = useCallback((e) => {
     e.preventDefault()
-    // Only trigger if leaving the zone (not a child element)
     if (!e.currentTarget.contains(e.relatedTarget)) {
       setIsDragging(false)
     }
@@ -74,13 +78,12 @@ export function FileUpload({ onUpload, isUploading }) {
   const handleBrowse = (e) => {
     const files = Array.from(e.target.files)
     processFiles(files)
-    // Reset input so same file can be re-selected
     e.target.value = ''
   }
 
   const handleUpload = () => {
     if (stagedFiles.length === 0 || isUploading) return
-    onUpload(stagedFiles, category)
+    onUpload(stagedFiles, category, scope)
     setStagedFiles([])
     setValidationErrors([])
   }
@@ -175,7 +178,7 @@ export function FileUpload({ onUpload, isUploading }) {
         )}
       </AnimatePresence>
 
-      {/* Staged files + category selector */}
+      {/* Staged files + scope + category selector */}
       <AnimatePresence>
         {stagedFiles.length > 0 && (
           <motion.div
@@ -216,9 +219,27 @@ export function FileUpload({ onUpload, isUploading }) {
               </div>
             </div>
 
-            {/* Category selector + upload button */}
+            {/* Scope selector + Category selector + upload button */}
             <div className="px-4 py-3 flex items-center gap-3 flex-wrap">
-              <div className="flex items-center gap-2 flex-1 min-w-0">
+
+              {/* Scope selector */}
+              <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+                <Shield size={15} className="text-primary-500 flex-shrink-0" />
+                <label className="text-sm font-medium text-surface-600 whitespace-nowrap">Scope</label>
+                <select
+                  value={scope}
+                  onChange={(e) => setScope(e.target.value)}
+                  className="flex-1 min-w-0 px-3 py-1.5 text-sm bg-surface-100 border border-surface-200 rounded-lg outline-none focus:border-primary-400 focus:ring-2 focus:ring-primary-500/20 transition-all text-surface-900"
+                >
+                  <option value="workspace">🔒 My Workspace (Private)</option>
+                  <option value="company" disabled={!isAdmin}>
+                    🏢 Company Knowledge (Shared) {!isAdmin ? '🔒 Admin Only' : ''}
+                  </option>
+                </select>
+              </div>
+
+              {/* Category selector */}
+              <div className="flex items-center gap-2 flex-1 min-w-[180px]">
                 <FolderOpen size={15} className="text-surface-400 flex-shrink-0" />
                 <label className="text-sm font-medium text-surface-600 whitespace-nowrap">Category</label>
                 <select
@@ -231,6 +252,7 @@ export function FileUpload({ onUpload, isUploading }) {
                   ))}
                 </select>
               </div>
+
               <Button
                 onClick={handleUpload}
                 loading={isUploading}
