@@ -46,11 +46,17 @@ class LocalEmbeddingEngine:
             try:
                 from sentence_transformers import SentenceTransformer
 
-                self._model = SentenceTransformer(self._model_name)
-                if hasattr(self._model, "get_embedding_dimension"):
-                    self._dim = self._model.get_embedding_dimension()
-                else:
-                    self._dim = self._model.get_sentence_embedding_dimension()
+                try:
+                    self._model = SentenceTransformer(self._model_name, local_files_only=True)
+                except Exception:
+                    logger.info("Local model cache miss for %s. Downloading from Hugging Face...", self._model_name)
+                    self._model = SentenceTransformer(self._model_name)
+
+                get_dim = getattr(self._model, "get_embedding_dimension", None) or getattr(self._model, "get_sentence_embedding_dimension", None)
+                if callable(get_dim):
+                    dim_val = get_dim()
+                    if dim_val is not None:
+                        self._dim = dim_val
 
                 logger.info("LocalEmbeddingEngine initialised (SentenceTransformer): model=%s, dim=%d", self._model_name, self._dim)
 
